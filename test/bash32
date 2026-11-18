@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# bash 3.2 for test/run.sh where there's no macOS /bin/bash: runs the official
+# bash:3.2 image, with curl and jq added, on the host's network.
+set -euo pipefail
+
+repo=$(cd "$(dirname "$0")/.." && pwd)
+image=glog-test-bash32
+docker build -q -t "$image" -f "$repo/test/bash32.Dockerfile" "$repo/test" >/dev/null
+exec docker run --rm --network host -e GLOG_URL -e GLOG_TOKEN -e GLOG_CONFIG -e TZ \
+  -v "$repo:$repo:ro" -w "$repo" "$image" bash "$@"

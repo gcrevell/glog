@@ -65,21 +65,17 @@ Tell Claude to use `glog` (it'll read `glog --help`). To skip the permission pro
 
 ## Testing a change
 
-There's no test suite. A change is checked with `shellcheck` and by running the commands against a real Graylog. All of them except `api` only read, so this is safe on the live server:
+`test/run.sh` runs `shellcheck`, starts a throwaway Graylog in Docker, sends it a known set of messages and checks each command's output against them. It runs every check with Homebrew's bash and with macOS's bash 3.2:
 
 ```sh
-shellcheck glog
-for sh in bash /bin/bash; do   # Homebrew's bash, and macOS's bash 3.2
-  $sh ./glog search -n 3
-  $sh ./glog search -r "yesterday 2pm to yesterday 3pm" -n 1
-  $sh ./glog count 'level:<=3' -g source -g level:2 -r 1d
-  $sh ./glog count --every 1h -r 4h -m count
-  $sh ./glog fields -r 15m
-  $sh ./glog streams
-  $sh ./glog status
-  $sh ./glog search 'source:('   # should fail with Graylog's parse error
-done
+test/run.sh                       # about a minute once the images are pulled
+test/run.sh --keep                # leave Graylog up on http://127.0.0.1:19000 (admin/admin)
+test/run.sh bash test/bash32      # bash 3.2 in a container, where there's no /bin/bash 3.2
 ```
+
+The test Graylog, MongoDB and OpenSearch are pinned in [`test/compose.yml`](test/compose.yml) to the versions stats-server runs. Renovate bumps them like any other dependency, and the Test workflow runs on its PR, so a Graylog release that breaks `glog` shows up as a failed check before the server is upgraded.
+
+A field Graylog has just seen for the first time doesn't show in `fields` straight away, so that check looks only for the standard fields. Every command except `api` only reads, so it's also safe to try a change against the live server.
 
 ## Versioning
 
