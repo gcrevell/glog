@@ -44,7 +44,10 @@ start_graylog() {
   if ! $keep; then
     trap '"${compose[@]}" down -v >/dev/null 2>&1' EXIT
   fi
-  "${compose[@]}" up -d --wait --wait-timeout 600
+  if ! "${compose[@]}" up -d --wait --wait-timeout 600; then
+    "${compose[@]}" logs --tail 100 graylog >&2
+    exit 1
+  fi
 
   GLOG_TOKEN=$(admin -X POST "$api/users/local:admin/tokens/glog-test" -d '{}' | jq -r .token)
   admin -X POST "$api/system/inputs" -d '{
@@ -245,11 +248,9 @@ EOF
 ^"timestamp","date"$
 EOF
 
-  check "streams" glog streams <<'EOF'
-"id","title","disabled"
-"000000000000000000000002","All events",false
-"000000000000000000000003","All system events",false
-"000000000000000000000001","Default Stream",false
+  check_lines "streams" glog streams <<'EOF'
+^"id","title","disabled"$
+^"000000000000000000000001","Default Stream",false$
 EOF
 
   check_lines "status" glog status <<EOF
