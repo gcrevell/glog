@@ -16,7 +16,7 @@
       "allowedVersions": "<3.3"
     },
     {
-      "description": "Held where home-ansible holds stats-server's; see its renovate.json5.",
+      "description": "Held at the majors the production Graylog runs.",
       "matchDepNames": ["mongo"],
       "allowedVersions": "<8.0.0"
     },

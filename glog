@@ -39,10 +39,10 @@ Queries are Lucene. Leading wildcards may be disabled, and field names differ
 between sources, so check `glog fields` before filtering on one.
 
 Examples:
-  glog search 'source:home-assistant AND level:<=3' -r 6h
+  glog search 'source:web-01 AND level:<=3' -r 6h
   glog count 'level:<=3' -g source -g level -r 1d
   glog count --every 1h -r 1d -s "Default Stream"
-  glog count _exists_:deadfront_response_ms -m count -m percentile:deadfront_response_ms:95
+  glog count _exists_:response_ms -m count -m percentile:response_ms:95
   glog search -r "yesterday 2pm to yesterday 3pm" -f timestamp,source,level,message
   glog api GET /system/indices/index_sets
 
