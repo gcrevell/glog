@@ -1,5 +1,5 @@
-# A throwaway Graylog for test/run.sh, pinned to the versions stats-server runs
-# (home-ansible: stats-server/vars.yml). The password and secret are fixed
+# A throwaway Graylog for test/run.sh, pinned to the versions the production
+# Graylog runs. The password and secret are fixed
 # because nothing outlives a test run; the admin password is "admin".
 name: glog-test
 

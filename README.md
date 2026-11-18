@@ -5,17 +5,17 @@ Search Graylog from the command line. `glog` wraps Graylog's search API in a few
 ```console
 $ glog count 'level:<=3' -g source -r 1d
 "source","count()"
-"file-server",5779
-"edge-server",753
-"home-assistant",213
-"dev-server",29
-"stats-server",23
-"dns-server",22
+"web-01",5779
+"web-02",753
+"api",213
+"worker",29
+"db",23
+"proxy",22
 
-$ glog search source:edge-server -n 2 -f timestamp,level,message
+$ glog search source:web-02 -n 2 -f timestamp,level,message
 "timestamp","level","message"
-"2026-11-18T15:45:46.963Z",6,"Finished net-watchdog.service - Check the network path to the gateway, record and recover the interface if it is gone."
-"2026-11-18T15:45:46.963Z",6,"net-watchdog.service: Deactivated successfully."
+"2026-11-18T15:45:46.963Z",6,"Finished logrotate.service - Rotate log files."
+"2026-11-18T15:45:46.963Z",6,"logrotate.service: Deactivated successfully."
 ```
 
 ## Install
@@ -73,10 +73,14 @@ test/run.sh --keep                # leave Graylog up on http://127.0.0.1:19000 (
 test/run.sh bash test/bash32      # bash 3.2 in a container, where there's no /bin/bash 3.2
 ```
 
-The test Graylog, MongoDB and OpenSearch are pinned in [`test/compose.yml`](test/compose.yml) to the versions stats-server runs. Renovate bumps them like any other dependency, and the Test workflow runs on its PR, so a Graylog release that breaks `glog` shows up as a failed check before the server is upgraded.
+The test Graylog, MongoDB and OpenSearch are pinned in [`test/compose.yml`](test/compose.yml) to the versions the production Graylog runs. Renovate bumps them like any other dependency, and the Test workflow runs on its PR, so a Graylog release that breaks `glog` shows up as a failed check before the server is upgraded.
 
 A field Graylog has just seen for the first time doesn't show in `fields` straight away, so that check looks only for the standard fields. Every command except `api` only reads, so it's also safe to try a change against the live server.
 
 ## Versioning
 
 Every push to `main` is tagged `vYYYY.M.N` by the shared CalVer workflow in [gcrevell/workflows](https://github.com/gcrevell/workflows).
+
+## License
+
+[MIT](LICENSE)
