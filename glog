@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+config_file=${GLOG_CONFIG:-$HOME/.config/glog/config.vars}
+
+usage() {
+  cat <<'EOF'
+glog: search Graylog from the command line.
+
+  glog search [QUERY] [options]   Messages matching a Lucene query (default: *)
+  glog count  [QUERY] [options]   Counts or other metrics, grouped by field or time
+  glog fields [options]           Fields seen in the time range, with their types
+  glog streams                    Stream IDs and titles
+  glog status                     Version, indexer health, journal, inputs, notifications
+  glog api METHOD PATH [BODY]     Any REST call, PATH relative to /api; prints the JSON
+
+Time range (search, count, fields):
+  -r, --range R        15m, 2h, 7d back from now (default: 1h), or words Graylog
+                       reads in your local timezone: yesterday, "last week",
+                       "yesterday 2pm to yesterday 3pm"
+  --from T [--to T]    ISO 8601, e.g. 2026-11-18T09:00:00-06:00 (--to defaults to now)
+  -s, --stream S       Stream title or ID, repeatable; scoping to a stream is faster
+
+search:
+  -f, --fields LIST    Comma-separated (default: timestamp,source,message)
+  -n, --limit N        Messages to return (default: 25); --offset N to page
+  --sort FIELD         Field to sort by, newest first (default: timestamp); --asc flips it
+  -w, --width N        Cut values to N characters (default: 300; 0 for no limit)
+
+count:
+  -g, --by FIELD[:N]   Group by FIELD's top N values (default: 10), repeatable.
+                       Without -g or --every, groups by source
+  --every UNIT         Group by time first: 1m, 10m, 1h, 1d
+  -m, --metric M       count (default), FN:FIELD or percentile:FIELD:PCT, repeatable.
+                       FN is avg, min, max, sum, card, stddev, variance or latest
+
+Output is CSV with a header row; --json prints Graylog's response instead.
+Queries are Lucene. Leading wildcards may be disabled, and field names differ
+between sources, so check `glog fields` before filtering on one.
+
+Examples:
+  glog search 'source:home-assistant AND level:<=3' -r 6h
+  glog count 'level:<=3' -g source -g level -r 1d
+  glog count --every 1h -r 1d -s "Default Stream"
+  glog count _exists_:deadfront_response_ms -m count -m percentile:deadfront_response_ms:95
+  glog search -r "yesterday 2pm to yesterday 3pm" -f timestamp,source,level,message
+  glog api GET /system/indices/index_sets
+
+Config: GLOG_URL and GLOG_TOKEN, read from ~/.config/glog/config.vars (or the
+file $GLOG_CONFIG names). Environment variables of the same names win.
+EOF
+}
+
+die() {
+  echo "glog: $*" >&2
+  exit 1
+}
+
+load_config() {
+  local url=${GLOG_URL-} token=${GLOG_TOKEN-}
+  if [[ -f $config_file ]]; then
+    # shellcheck source=/dev/null
+    source "$config_file"
+  fi
+  GLOG_URL=${url:-${GLOG_URL-}}
+  GLOG_TOKEN=${token:-${GLOG_TOKEN-}}
+  [[ -n $GLOG_URL && -n $GLOG_TOKEN ]] || die "set GLOG_URL and GLOG_TOKEN in $config_file:
+  GLOG_URL=\"https://graylog.example\"
+  GLOG_TOKEN=\"...\"   # Graylog: System > Users and Teams > your user > Edit Tokens"
+  GLOG_URL=${GLOG_URL%/}
+}
+
+request() {
+  local method=$1 path=$2 body=${3-} response status message
+  local args=(-sS -X "$method" -K - -H 'X-Requested-By: glog' -H 'Accept: application/json' -w '\n%{http_code}')
+  if [[ -n $body ]]; then
+    args+=(-H 'Content-Type: application/json' --data-raw "$body")
+  fi
+  response=$(printf 'user = "%s:token"\n' "$GLOG_TOKEN" | curl "${args[@]}" "$GLOG_URL/api$path") ||
+    die "could not reach $GLOG_URL; check GLOG_URL in $config_file"
+  status=${response##*$'\n'}
+  response=${response%$'\n'*}
+  case $status in
+    2??) printf '%s\n' "$response" ;;
+    401) die "Graylog rejected the token; replace GLOG_TOKEN in $config_file" ;;
+    *)
+      message=$(jq -r '.message // empty' <<<"$response" 2>/dev/null) || message=${response:0:300}
+      die "$method $path returned HTTP $status${message:+: $message}"
+      ;;
+  esac
+}
+
+format() {
+  if $json; then cat; else "$@"; fi
+}
+
+table() {
+  jq -r --argjson width "$width" '
+    def tidy:
+      if type == "string" then
+        gsub("\u001b\\[[0-9;]*m"; "") | gsub("^\\[[0-9;]*m"; "") | gsub("\r?\n"; "\\n")
+        | if $width > 0 and length > $width then .[:$width] + "…" else . end
+      elif type == "number" and . != floor then (. * 100 | round) / 100
+      elif type == "array" or type == "object" then tojson
+      else . end;
+    (.schema | map(.name | sub("^[a-z]+: "; ""))), (.datarows[] | map(tidy))
+    | @csv'
+}
+
+local_timezone() {
+  if [[ -n ${TZ-} ]]; then
+    echo "$TZ"
+  else
+    readlink /etc/localtime 2>/dev/null | sed 's|.*zoneinfo/||' || true
+  fi
+}
+
+timerange() {
+  if [[ -n $from ]]; then
+    jq -nc --arg from "$from" --arg to "${to:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" '{type: "absolute", from: $from, to: $to}'
+  elif [[ $range =~ ^([0-9]+)([smhdw])$ ]]; then
+    local seconds
+    case ${BASH_REMATCH[2]} in
+      s) seconds=1 ;; m) seconds=60 ;; h) seconds=3600 ;; d) seconds=86400 ;; w) seconds=604800 ;;
+    esac
+    echo "{\"type\":\"relative\",\"range\":$((BASH_REMATCH[1] * seconds))}"
+  else
+    jq -nc --arg keyword "$range" --arg timezone "$(local_timezone)" \
+      '{type: "keyword", keyword: $keyword} + if $timezone == "" then {} else {timezone: $timezone} end'
+  fi
+}
+
+stream_ids() {
+  if [[ -z $streams ]]; then
+    echo '[]'
+    return
+  fi
+  request GET /streams | jq -c --arg wanted "$streams" '
+    .streams as $all
+    | $wanted | split("\n") | map(select(. != "")) | map(
+        . as $name
+        | if test("^[0-9a-f]{24}$") then .
+          else [$all[] | select(.title | ascii_downcase == ($name | ascii_downcase)) | .id][0]
+            // ("glog: no stream called \"\($name)\"; there are: \([$all[].title] | join(", "))\n" | halt_error(1))
+          end)'
+}
+
+cmd_search() {
+  local body
+  body=$(jq -nc --arg query "${query:-*}" --argjson streams "$stream_json" --argjson timerange "$range_json" \
+    --arg fields "$fields" --argjson size "$limit" --argjson from "$offset" --arg sort "$sort" --arg order "$order" \
+    '{query: $query, streams: $streams, timerange: $timerange, fields: ($fields | split(",")),
+      size: $size, from: $from, sort: $sort, sort_order: $order}')
+  request POST /search/messages "$body" | format table
+}
+
+cmd_count() {
+  local body
+  body=$(jq -nc --arg query "${query:-*}" --argjson streams "$stream_json" --argjson timerange "$range_json" \
+    --arg groups "$groups" --arg every "$every" --arg metrics "$metrics" '
+    def lines: split("\n") | map(select(. != ""));
+    def grouping: split(":") | {field: .[0], limit: (.[1] // "10" | tonumber)};
+    def metric: split(":")
+      | {function: .[0]}
+        + if .[1] then {field: .[1]} else {} end
+        + if .[2] then {configuration: {percentile: (.[2] | tonumber)}} else {} end;
+    ($groups | lines) as $by
+    | {
+        query: $query, streams: $streams, timerange: $timerange,
+        group_by: (if $every == "" then [] else [{field: "timestamp", timeunit: $every}] end)
+          + (if $by == [] and $every == "" then ["source"] else $by end | map(grouping)),
+        metrics: ($metrics | lines | if . == [] then ["count"] else . end | map(metric))
+      }')
+  request POST /search/aggregate "$body" | format table
+}
+
+cmd_fields() {
+  local body
+  body=$(jq -nc --argjson streams "$stream_json" --argjson timerange "$range_json" '{streams: $streams, timerange: $timerange}')
+  request POST /views/fields "$body" | format jq -r '["field", "type"], (sort_by(.name)[] | [.name, .type.type]) | @csv'
+}
+
+cmd_streams() {
+  request GET /streams | format jq -r '["id", "title", "disabled"], (.streams | sort_by(.title)[] | [.id, .title, .disabled]) | @csv'
+}
+
+cmd_status() {
+  local system indexer journal inputs notifications
+  system=$(request GET /system)
+  indexer=$(request GET /system/indexer/cluster/health)
+  journal=$(request GET /system/journal)
+  inputs=$(request GET /system/inputstates)
+  notifications=$(request GET /system/notifications)
+  jq -n --argjson system "$system" --argjson indexer "$indexer" --argjson journal "$journal" \
+    --argjson inputs "$inputs" --argjson notifications "$notifications" \
+    '{$system, $indexer, $journal, $inputs, $notifications}' | format jq -r '
+    "version        \(.system.version)",
+    "lifecycle      \(.system.lifecycle)\(if .system.is_processing then "" else ", not processing" end)",
+    "indexer        \(.indexer.status), \(.indexer.shards.active) active shards, \(.indexer.shards.unassigned) unassigned",
+    "journal        \(.journal.uncommitted_journal_entries) uncommitted entries",
+    (.inputs.states | sort_by(.message_input.title)[]
+      | "input          \(.state) \(.message_input.title) (\(.message_input.type | split(".") | last))"),
+    if .notifications.total == 0 then "notifications  none"
+    else .notifications.notifications[] | "notification   \(.severity) \(.type) since \(.timestamp)" end'
+}
+
+need_value() {
+  [[ $2 -ge 2 ]] || die "$1 needs a value"
+}
+
+need_number() {
+  [[ $2 =~ ^[0-9]+$ ]] || die "$1 takes a whole number, not \"$2\""
+}
+
+main() {
+  command -v jq >/dev/null || die "glog needs jq; install it with: brew install jq"
+  [[ $# -gt 0 ]] || { usage >&2; exit 1; }
+  local command=$1
+  shift
+  case $command in
+    -h | --help | help) usage; return ;;
+    api)
+      [[ $# -ge 2 ]] || die "usage: glog api METHOD PATH [BODY]"
+      load_config
+      request "$1" "$2" "${3-}"
+      return
+      ;;
+    search | count | fields | streams | status) ;;
+    *) die "no command \"$command\"; run glog --help" ;;
+  esac
+
+  query="" range=1h from="" to="" streams="" json=false
+  fields=timestamp,source,message limit=25 offset=0 sort=timestamp order=Descending width=300
+  groups="" every="" metrics=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -r | --range) need_value "$1" $#; range=$2; shift ;;
+      --from) need_value "$1" $#; from=$2; shift ;;
+      --to) need_value "$1" $#; to=$2; shift ;;
+      -s | --stream) need_value "$1" $#; streams+=$2$'\n'; shift ;;
+      -f | --fields) need_value "$1" $#; fields=$2; shift ;;
+      -n | --limit) need_value "$1" $#; need_number "$1" "$2"; limit=$2; shift ;;
+      --offset) need_value "$1" $#; need_number "$1" "$2"; offset=$2; shift ;;
+      --sort) need_value "$1" $#; sort=$2; shift ;;
+      --asc) order=Ascending ;;
+      -w | --width) need_value "$1" $#; need_number "$1" "$2"; width=$2; shift ;;
+      -g | --by) need_value "$1" $#; groups+=$2$'\n'; shift ;;
+      --every) need_value "$1" $#; every=$2; shift ;;
+      -m | --metric) need_value "$1" $#; metrics+=$2$'\n'; shift ;;
+      --json) json=true ;;
+      -h | --help) usage; return ;;
+      --) shift; query="$*"; break ;;
+      -*) die "no option $1; run glog --help" ;;
+      *)
+        [[ -z $query ]] || die "give the query as one argument: glog $command '$query $1'"
+        query=$1
+        ;;
+    esac
+    shift
+  done
+
+  [[ -z $to || -n $from ]] || die "--to needs --from"
+
+  load_config
+  if [[ $command == search || $command == count || $command == fields ]]; then
+    stream_json=$(stream_ids)
+    range_json=$(timerange)
+  fi
+  "cmd_$command"
+}
+
+main "$@"
