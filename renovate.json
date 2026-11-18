@@ -8,5 +8,21 @@
   "schedule": [
     "* * * * 6"
   ],
-  "prConcurrentLimit": 1
+  "prConcurrentLimit": 1,
+  "packageRules": [
+    {
+      "description": "The test bash is the 3.2 macOS ships, not the newest.",
+      "matchDepNames": ["bash"],
+      "allowedVersions": "<3.3"
+    },
+    {
+      "description": "Held where home-ansible holds stats-server's; see its renovate.json5.",
+      "matchDepNames": ["mongo"],
+      "allowedVersions": "<8.0.0"
+    },
+    {
+      "matchDepNames": ["opensearchproject/opensearch"],
+      "allowedVersions": "<3.0.0"
+    }
+  ]
 }

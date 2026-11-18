@@ -1,0 +1,47 @@
+# A throwaway Graylog for test/run.sh, pinned to the versions stats-server runs
+# (home-ansible: stats-server/vars.yml). The password and secret are fixed
+# because nothing outlives a test run; the admin password is "admin".
+name: glog-test
+
+services:
+  mongodb:
+    image: mongo:7.0.48
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.7
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      action.auto_create_index: "false"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9200/_cluster/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  graylog:
+    image: graylog/graylog:7.2.2
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:19000:9000
+      - 127.0.0.1:19201:12201
+    environment:
+      GRAYLOG_PASSWORD_SECRET: glog-test-password-secret-0123456789
+      GRAYLOG_ROOT_PASSWORD_SHA2: 8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      GRAYLOG_HTTP_BIND_ADDRESS: 0.0.0.0:9000
+      GRAYLOG_HTTP_EXTERNAL_URI: http://127.0.0.1:19000/
+      GRAYLOG_ELASTICSEARCH_HOSTS: http://opensearch:9200
+      GRAYLOG_MONGODB_URI: mongodb://mongodb:27017/graylog
+      GRAYLOG_TELEMETRY_ENABLED: "false"
+      GRAYLOG_VERSIONCHECKS: "false"

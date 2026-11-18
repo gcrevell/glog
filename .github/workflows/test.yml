@@ -1,0 +1,17 @@
+# Runs test/run.sh against the Graylog in test/compose.yml, so a Renovate PR
+# that bumps it shows whether glog still works with the new version.
+
+name: Test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  graylog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: test/run.sh --keep bash test/bash32
+      - if: failure()
+        run: docker compose -f test/compose.yml logs graylog
